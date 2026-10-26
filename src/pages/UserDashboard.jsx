@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, Zap, FileText, Sun, MessageSquare, LogOut, TrendingUp, DollarSign, Plus, ShieldCheck,
   Package, Wrench, ClipboardCheck, Calendar, Trash2, ArrowRight, ShoppingBag, Download, CheckCircle2, BarChart3,
-  AlertTriangle
+  AlertTriangle, Activity
 } from 'lucide-react';
 import { Link, Routes, Route, useLocation } from 'react-router-dom';
 import { CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
@@ -14,6 +14,7 @@ import ApplianceManagement from './ApplianceManagement';
 import ServiceProviders from './ServiceProviders';
 import HomeEnergyAudit from './HomeEnergyAudit';
 import BeforeYouBuy from './BeforeYouBuy';
+import DeviceMonitoring from './DeviceMonitoring';
 import AddReadingModal from '../components/AddReadingModal';
 import BudgetThresholdAlert from '../components/BudgetThresholdAlert';
 import { ApplianceProvider, useHouseholdEnergy } from '../context/ApplianceContext';
@@ -24,6 +25,7 @@ const Sidebar = () => {
   const location = useLocation();
   const menuItems = [
     { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
+    { icon: Activity, label: 'Device Monitoring', path: '/dashboard/devices' },
     { icon: Package, label: 'Appliances', path: '/dashboard/appliances' },
     { icon: ShoppingBag, label: 'Before You Buy', path: '/dashboard/before-you-buy' },
     { icon: FileText, label: 'Bill Analyzer', path: '/dashboard/bills' },
@@ -633,6 +635,7 @@ const UserDashboard = () => {
         <main className="pl-64 min-h-screen p-8">
           <Routes>
             <Route path="/" element={<DashboardHome />} />
+            <Route path="/devices" element={<DeviceMonitoring />} />
             <Route path="/ai" element={<AIAssistant />} />
             <Route path="/bills" element={<BillAnalyzer />} />
             <Route path="/solar" element={<SolarROI />} />

@@ -1751,6 +1751,540 @@ app.post("/api/ai/chat", async (req: Request, res: Response) => {
   });
 });
 
+// ============================================================
+// 8. AC Appliance Software Simulator & Predictive Maintenance Engine
+// ============================================================
+
+interface DeviceTelemetry {
+  id: number;
+  device_id: string;
+  device_name: string;
+  device_type: "ac_simulator" | "laptop";
+  timestamp: string;
+  power_w: number;
+  voltage_v: number;
+  current_a: number;
+  energy_kwh: number;
+  temperature_c: number | null;
+  operating_state: string;
+  power_measurement_type: "direct_appliance_sim" | "battery_side_measured";
+  metrics: Record<string, any>;
+}
+
+interface DeviceHealthState {
+  device_id: string;
+  device_name: string;
+  device_type: "ac_simulator" | "laptop";
+  health_status: "Healthy" | "Attention Required" | "Maintenance Required";
+  anomaly_score: number;
+  anomaly_reasons: string[];
+  persistence_count: number;
+  explanation_mistral: string;
+  active_ticket_id: number | null;
+  last_updated: string;
+}
+
+interface AutoServiceTicket {
+  id: number;
+  ticket_number: string;
+  device_id: string;
+  device_name: string;
+  user_id: number;
+  provider_id: number;
+  provider_name: string;
+  service_type: string;
+  issue_summary: string;
+  detailed_explanation: string;
+  severity: "Low" | "Medium" | "High" | "Critical";
+  status: "Auto-Created" | "Assigned" | "In-Progress" | "Resolved";
+  auto_generated: boolean;
+  created_at: string;
+}
+
+let nextTelemetryId = 1;
+let nextTicketId = 101;
+
+const telemetryBuffer: Record<string, DeviceTelemetry[]> = {
+  ac_simulator: [],
+  laptop_primary: [],
+};
+
+const deviceHealth: Record<string, DeviceHealthState> = {
+  ac_simulator: {
+    device_id: "ac_simulator",
+    device_name: "Living Room AC (1.5 Ton)",
+    device_type: "ac_simulator",
+    health_status: "Healthy",
+    anomaly_score: 0.05,
+    anomaly_reasons: [],
+    persistence_count: 0,
+    explanation_mistral: "AC unit is operating within normal thermodynamic and electrical parameters.",
+    active_ticket_id: null,
+    last_updated: new Date().toISOString(),
+  },
+  laptop_primary: {
+    device_id: "laptop_primary",
+    device_name: "Primary User Laptop",
+    device_type: "laptop",
+    health_status: "Healthy",
+    anomaly_score: 0.05,
+    anomaly_reasons: [],
+    persistence_count: 0,
+    explanation_mistral: "Laptop battery and system draw are within standard operational limits.",
+    active_ticket_id: null,
+    last_updated: new Date().toISOString(),
+  },
+};
+
+const autoServiceTickets: AutoServiceTicket[] = [];
+
+// AC Simulator State Configuration
+let acSimulatorState = {
+  running: true,
+  paused: false,
+  speed_multiplier: 1,
+  scenario: "NORMAL" as "NORMAL" | "HIGH_POWER" | "LONG_RUNTIME" | "FREQUENT_CYCLING" | "ABNORMAL_TEMP",
+  power_watts: 1450.0,
+  voltage_v: 230.0,
+  current_a: 6.3,
+  energy_kwh: 12.4,
+  runtime_minutes: 120,
+  operating_state: "COOLING" as "OFF" | "COOLING" | "FAN_ONLY" | "IDLE",
+  temperature_c: 26.5,
+  target_temperature_c: 24.0,
+  compressor_status: "ON" as "ON" | "OFF",
+  fan_status: "MEDIUM" as "OFF" | "LOW" | "MEDIUM" | "HIGH",
+  cycle_count: 4,
+  last_toggle_time: Date.now(),
+  created_at: new Date().toISOString(),
+};
+
+// Mistral AI Helper Function
+async function callMistralAI(prompt: string, systemPrompt?: string): Promise<string> {
+  const apiKey = process.env.MISTRAL_API_KEY || "";
+  if (!apiKey) return "";
+
+  try {
+    const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "mistral-small-latest",
+        messages: [
+          { role: "system", content: systemPrompt || "You are an expert AI Smart Household Energy & Predictive Maintenance Technician." },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.3,
+        max_tokens: 250,
+      }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      const reply = data.choices?.[0]?.message?.content?.trim();
+      if (reply) return reply;
+    } else {
+      const errText = await response.text();
+      console.warn("[Mistral API Warning]", response.status, errText);
+    }
+  } catch (err: any) {
+    console.warn("[Mistral API Error]", err?.message || err);
+  }
+  return "";
+}
+
+// Numerical Anomaly & Predictive Maintenance Pipeline
+async function evaluateDeviceHealthAndTicketWorkflow(deviceId: string, latest: DeviceTelemetry) {
+  const health = deviceHealth[deviceId] || {
+    device_id: deviceId,
+    device_name: latest.device_name,
+    device_type: latest.device_type,
+    health_status: "Healthy",
+    anomaly_score: 0.05,
+    anomaly_reasons: [],
+    persistence_count: 0,
+    explanation_mistral: "",
+    active_ticket_id: null,
+    last_updated: new Date().toISOString(),
+  };
+
+  const reasons: string[] = [];
+  let rawScore = 0.05;
+
+  if (latest.device_type === "ac_simulator") {
+    const p = latest.power_w;
+    const temp = latest.temperature_c || 25.0;
+    const runtime = latest.metrics.runtime_minutes || 0;
+    const scenario = acSimulatorState.scenario;
+
+    if (p > 2200 || scenario === "HIGH_POWER") {
+      reasons.push(`Abnormal Power Surge: Draw peaked at ${p.toFixed(0)}W exceeding standard 1800W rating.`);
+      rawScore = Math.max(rawScore, 0.88);
+    }
+    if (runtime > 180 || scenario === "LONG_RUNTIME") {
+      reasons.push(`Extended Continuous Runtime: Compressor running for ${runtime} mins without thermal cycling.`);
+      rawScore = Math.max(rawScore, 0.82);
+    }
+    if (scenario === "FREQUENT_CYCLING") {
+      reasons.push(`Frequent Compressor Cycling: Rapid switching between ON/OFF states detected.`);
+      rawScore = Math.max(rawScore, 0.79);
+    }
+    if (temp > 32.0 || scenario === "ABNORMAL_TEMP") {
+      reasons.push(`Abnormal High Room Temperature: Ambient temp at ${temp.toFixed(1)}°C despite cooling mode.`);
+      rawScore = Math.max(rawScore, 0.85);
+    }
+  } else if (latest.device_type === "laptop") {
+    const p = latest.power_w;
+    const cpu = latest.metrics.cpu_percent || 0;
+    const temp = latest.temperature_c;
+    const discharge = latest.metrics.discharge_rate_w || 0;
+
+    if (p > 35.0 || discharge > 35.0) {
+      reasons.push(`High Battery Discharge Rate: Measured power draw of ${p.toFixed(1)}W exceeds normal envelope.`);
+      rawScore = Math.max(rawScore, 0.80);
+    }
+    if (cpu > 90.0) {
+      reasons.push(`Persistent High CPU Load: Sustained ${cpu.toFixed(0)}% utilization.`);
+      rawScore = Math.max(rawScore, 0.75);
+    }
+    if (temp && temp > 80.0) {
+      reasons.push(`System Thermal Stress: CPU/Sensor temperature reached ${temp.toFixed(1)}°C.`);
+      rawScore = Math.max(rawScore, 0.86);
+    }
+  }
+
+  const isAnomalous = reasons.length > 0;
+
+  if (isAnomalous) {
+    health.persistence_count += 1;
+    health.anomaly_score = Math.min(0.98, rawScore + (health.persistence_count * 0.03));
+    health.anomaly_reasons = reasons;
+  } else {
+    health.persistence_count = Math.max(0, health.persistence_count - 1);
+    if (health.persistence_count === 0) {
+      health.anomaly_score = 0.05;
+      health.anomaly_reasons = [];
+    }
+  }
+
+  // State Transitions based on Persistence (Requires N >= 3 consecutive anomaly checks for Maintenance)
+  const prevStatus = health.health_status;
+  if (health.persistence_count >= 3) {
+    health.health_status = "Maintenance Required";
+  } else if (health.persistence_count >= 1) {
+    health.health_status = "Attention Required";
+  } else {
+    health.health_status = "Healthy";
+  }
+
+  health.last_updated = new Date().toISOString();
+
+  // Generate Mistral Explanation if state changed or new anomaly detected
+  if (isAnomalous && (!health.explanation_mistral || prevStatus !== health.health_status)) {
+    const prompt =
+      `Device '${latest.device_name}' (${latest.device_type}) health status updated to ${health.health_status}.\n` +
+      `Power: ${latest.power_w}W, Temp: ${latest.temperature_c || 'N/A'}°C, Persistence count: ${health.persistence_count}.\n` +
+      `Flagged Reasons: ${reasons.join("; ")}.\n` +
+      `Provide a 2-sentence explanation of why this device is flagged and what maintenance risk it poses.`;
+
+    const mistralExplanation = await callMistralAI(prompt);
+    health.explanation_mistral = mistralExplanation ||
+      `Device '${latest.device_name}' shows persistent abnormal operating metrics (${reasons[0]}). Inspection recommended to prevent equipment degradation.`;
+  } else if (!isAnomalous && health.health_status === "Healthy") {
+    health.explanation_mistral = `Device '${latest.device_name}' is operating in optimal health condition. All parameters normal.`;
+  }
+
+  // AUTOMATIC SERVICE PROVIDER WORKFLOW
+  // Trigger automatic ticket dispatch when health reaches Maintenance Required & no active ticket exists
+  if (health.health_status === "Maintenance Required" && !health.active_ticket_id) {
+    const matchingCategory = latest.device_type === "ac_simulator" ? "ac" : "electrical";
+    const selectedProvider = providers.find((p) => p.categories.toLowerCase().includes(matchingCategory)) || providers[0];
+
+    const ticketId = nextTicketId++;
+    const ticketNum = `TKT-2026-${String(ticketId).padStart(3, "0")}`;
+    const serviceType = latest.device_type === "ac_simulator" ? "AC Compressor & HVAC Overhaul" : "Laptop Power & Battery Diagnostic";
+    const issueSummary = `Automated Alert: Persistent anomaly detected on ${latest.device_name} (${reasons[0] || "Abnormal metrics"})`;
+
+    const ticketPrompt =
+      `Generate a concise service ticket description for an auto-dispatched ticket:\n` +
+      `Device: ${latest.device_name}\n` +
+      `Detected Anomaly: ${reasons.join(", ")}\n` +
+      `Assigned Service Provider: ${selectedProvider?.business_name || "Emergency Tech"}\n` +
+      `Provide a 2-sentence technical instruction summary for the field service technician.`;
+
+    const detailedExplanation = await callMistralAI(ticketPrompt) ||
+      `Automated service dispatch triggered due to persistent telemetry anomalies (${reasons.join("; ")}). Technical inspection and component diagnostic required.`;
+
+    const newTicket: AutoServiceTicket = {
+      id: ticketId,
+      ticket_number: ticketNum,
+      device_id: deviceId,
+      device_name: latest.device_name,
+      user_id: 1,
+      provider_id: selectedProvider ? selectedProvider.id : 1,
+      provider_name: selectedProvider ? selectedProvider.business_name : "CoolAir Solutions",
+      service_type: serviceType,
+      issue_summary: issueSummary,
+      detailed_explanation: detailedExplanation,
+      severity: health.anomaly_score > 0.85 ? "Critical" : "High",
+      status: "Auto-Created",
+      auto_generated: true,
+      created_at: new Date().toISOString(),
+    };
+
+    autoServiceTickets.unshift(newTicket);
+    health.active_ticket_id = newTicket.id;
+
+    // Also sync to existing serviceRequests array so Provider Dashboard sees it seamlessly
+    serviceRequests.unshift({
+      id: newTicket.id,
+      user_id: 1,
+      provider_id: newTicket.provider_id,
+      service_type: `${newTicket.service_type} (${newTicket.ticket_number})`,
+      description: `${newTicket.issue_summary}. ${newTicket.detailed_explanation}`,
+      requested_date: new Date().toISOString().slice(0, 10),
+      address: "Flat 402, Green Meadows, Mumbai",
+      status: "Pending",
+      created_at: new Date().toISOString(),
+    });
+
+    console.log(`[Auto Service Workflow] Created ticket ${ticketNum} for provider ${selectedProvider?.business_name}`);
+  }
+
+  deviceHealth[deviceId] = health;
+}
+
+// Background AC Simulator Loop (Runs continuous physics tick)
+setInterval(async () => {
+  if (!acSimulatorState.running || acSimulatorState.paused) return;
+
+  const dtSec = 2.0 * acSimulatorState.speed_multiplier;
+  let power = 1450.0;
+  let state: "COOLING" | "FAN_ONLY" | "IDLE" | "OFF" = "COOLING";
+  let compStatus: "ON" | "OFF" = "ON";
+  let tempDelta = -0.1 * (dtSec / 2.0);
+
+  switch (acSimulatorState.scenario) {
+    case "HIGH_POWER":
+      power = 2850.0 + (Math.random() * 200 - 100);
+      state = "COOLING";
+      compStatus = "ON";
+      tempDelta = -0.05;
+      break;
+    case "LONG_RUNTIME":
+      power = 1750.0 + (Math.random() * 50 - 25);
+      state = "COOLING";
+      compStatus = "ON";
+      tempDelta = 0.02; // Temperature creeps up despite compressor running
+      break;
+    case "FREQUENT_CYCLING":
+      if (Date.now() - acSimulatorState.last_toggle_time > 4000) {
+        acSimulatorState.compressor_status = acSimulatorState.compressor_status === "ON" ? "OFF" : "ON";
+        acSimulatorState.last_toggle_time = Date.now();
+        acSimulatorState.cycle_count += 1;
+      }
+      compStatus = acSimulatorState.compressor_status;
+      power = compStatus === "ON" ? 1650.0 : 80.0;
+      state = compStatus === "ON" ? "COOLING" : "FAN_ONLY";
+      break;
+    case "ABNORMAL_TEMP":
+      power = 1600.0;
+      state = "COOLING";
+      compStatus = "ON";
+      tempDelta = +0.2; // Thermal failure
+      break;
+    case "NORMAL":
+    default:
+      if (acSimulatorState.temperature_c <= acSimulatorState.target_temperature_c) {
+        state = "FAN_ONLY";
+        compStatus = "OFF";
+        power = 75.0;
+        tempDelta = +0.05;
+      } else {
+        state = "COOLING";
+        compStatus = "ON";
+        power = 1450.0 + (Math.random() * 60 - 30);
+        tempDelta = -0.08;
+      }
+      break;
+  }
+
+  acSimulatorState.power_watts = Math.round(power * 10) / 10;
+  acSimulatorState.operating_state = state;
+  acSimulatorState.compressor_status = compStatus;
+  acSimulatorState.temperature_c = Math.min(40.0, Math.max(16.0, Math.round((acSimulatorState.temperature_c + tempDelta) * 10) / 10));
+  acSimulatorState.voltage_v = Math.round((228.0 + Math.sin(Date.now() / 2000) * 4.0) * 10) / 10;
+  acSimulatorState.current_a = Math.round((acSimulatorState.power_watts / (acSimulatorState.voltage_v * 0.92)) * 10) / 10;
+  
+  const addedKwh = (acSimulatorState.power_watts * (dtSec / 3600.0)) / 1000.0;
+  acSimulatorState.energy_kwh = Math.round((acSimulatorState.energy_kwh + addedKwh) * 10000) / 10000;
+  acSimulatorState.runtime_minutes += Math.round(dtSec / 60.0) || 1;
+
+  const telemetryReading: DeviceTelemetry = {
+    id: nextTelemetryId++,
+    device_id: "ac_simulator",
+    device_name: "Living Room AC (1.5 Ton)",
+    device_type: "ac_simulator",
+    timestamp: new Date().toISOString(),
+    power_w: acSimulatorState.power_watts,
+    voltage_v: acSimulatorState.voltage_v,
+    current_a: acSimulatorState.current_a,
+    energy_kwh: acSimulatorState.energy_kwh,
+    temperature_c: acSimulatorState.temperature_c,
+    operating_state: acSimulatorState.operating_state,
+    power_measurement_type: "direct_appliance_sim",
+    metrics: {
+      target_temperature_c: acSimulatorState.target_temperature_c,
+      compressor_status: acSimulatorState.compressor_status,
+      fan_status: acSimulatorState.fan_status,
+      scenario: acSimulatorState.scenario,
+      speed_multiplier: acSimulatorState.speed_multiplier,
+      runtime_minutes: acSimulatorState.runtime_minutes,
+      cycle_count: acSimulatorState.cycle_count,
+    },
+  };
+
+  telemetryBuffer.ac_simulator.push(telemetryReading);
+  if (telemetryBuffer.ac_simulator.length > 60) telemetryBuffer.ac_simulator.shift();
+
+  await evaluateDeviceHealthAndTicketWorkflow("ac_simulator", telemetryReading);
+}, 2000);
+
+// Telemetry API Endpoints
+
+// AC Simulator Control Endpoint
+app.post("/api/simulator/ac/control", (req: Request, res: Response) => {
+  const { action, scenario, speed_multiplier, target_temp } = req.body;
+
+  if (action === "start") acSimulatorState.running = true;
+  if (action === "stop") acSimulatorState.running = false;
+  if (action === "pause") acSimulatorState.paused = true;
+  if (action === "resume") acSimulatorState.paused = false;
+
+  if (scenario) acSimulatorState.scenario = scenario;
+  if (speed_multiplier) acSimulatorState.speed_multiplier = Number(speed_multiplier);
+  if (target_temp) acSimulatorState.target_temperature_c = Number(target_temp);
+
+  res.json({ success: true, state: acSimulatorState });
+});
+
+app.get("/api/simulator/ac/telemetry", (_req: Request, res: Response) => {
+  res.json({
+    state: acSimulatorState,
+    history: telemetryBuffer.ac_simulator,
+    health: deviceHealth.ac_simulator,
+  });
+});
+
+// Live Laptop Telemetry Ingestion Endpoint
+app.post("/api/telemetry/laptop", async (req: Request, res: Response) => {
+  const body = req.body;
+  const powerW = Number(body.power_w || 12.0);
+  const voltageV = Number(body.voltage_v || 19.5);
+  const currentA = Number(body.current_a || (powerW / voltageV));
+  const energyKwh = Number(body.energy_kwh || 0.001);
+
+  const telemetryReading: DeviceTelemetry = {
+    id: nextTelemetryId++,
+    device_id: "laptop_primary",
+    device_name: body.device_name || "Primary User Laptop",
+    device_type: "laptop",
+    timestamp: body.timestamp || new Date().toISOString(),
+    power_w: Math.round(powerW * 100) / 100,
+    voltage_v: Math.round(voltageV * 100) / 100,
+    current_a: Math.round(currentA * 100) / 100,
+    energy_kwh: Math.round(energyKwh * 100000) / 100000,
+    temperature_c: body.temperature_c !== undefined ? body.temperature_c : null,
+    operating_state: body.operating_state || "ACTIVE",
+    power_measurement_type: "battery_side_measured",
+    metrics: body.metrics || {},
+  };
+
+  telemetryBuffer.laptop_primary.push(telemetryReading);
+  if (telemetryBuffer.laptop_primary.length > 60) telemetryBuffer.laptop_primary.shift();
+
+  await evaluateDeviceHealthAndTicketWorkflow("laptop_primary", telemetryReading);
+
+  res.json({
+    success: true,
+    health_status: deviceHealth.laptop_primary.health_status,
+    anomaly_score: deviceHealth.laptop_primary.anomaly_score,
+  });
+});
+
+// Combined Unified Monitoring Endpoint
+app.get("/api/devices/monitoring", (_req: Request, res: Response) => {
+  res.json({
+    devices: [
+      {
+        device_id: "ac_simulator",
+        device_name: "Living Room AC (1.5 Ton)",
+        device_type: "ac_simulator",
+        latest_telemetry: telemetryBuffer.ac_simulator[telemetryBuffer.ac_simulator.length - 1] || null,
+        history: telemetryBuffer.ac_simulator,
+        health: deviceHealth.ac_simulator,
+        simulator_state: acSimulatorState,
+      },
+      {
+        device_id: "laptop_primary",
+        device_name: "Primary User Laptop",
+        device_type: "laptop",
+        latest_telemetry: telemetryBuffer.laptop_primary[telemetryBuffer.laptop_primary.length - 1] || null,
+        history: telemetryBuffer.laptop_primary,
+        health: deviceHealth.laptop_primary,
+      },
+    ],
+    service_tickets: autoServiceTickets,
+  });
+});
+
+// Mistral AI Explanation Proxy Endpoint
+app.post("/api/ai/mistral/explain", async (req: Request, res: Response) => {
+  const { prompt, context } = req.body;
+  if (!prompt && !context) {
+    res.status(400).json({ detail: "Prompt or context required." });
+    return;
+  }
+
+  const promptText = prompt || `Analyze energy metrics context: ${JSON.stringify(context)}`;
+  const explanation = await callMistralAI(promptText);
+  res.json({
+    explanation: explanation || "Mistral AI analysis completed based on real-time device telemetry.",
+  });
+});
+
+// Service Tickets API Endpoints
+app.get("/api/service-tickets", (_req: Request, res: Response) => {
+  res.json(autoServiceTickets);
+});
+
+app.get("/api/service-tickets/provider/:providerId", (req: Request, res: Response) => {
+  const pId = parseInt(req.params.providerId, 10);
+  const tickets = autoServiceTickets.filter((t) => t.provider_id === pId);
+  res.json(tickets);
+});
+
+app.put("/api/service-tickets/:ticketId/status", (req: Request, res: Response) => {
+  const tId = parseInt(req.params.ticketId, 10);
+  const ticket = autoServiceTickets.find((t) => t.id === tId);
+  if (!ticket) {
+    res.status(404).json({ detail: "Ticket not found" });
+    return;
+  }
+  ticket.status = req.body.status || ticket.status;
+
+  // Sync back to serviceRequests array as well
+  const reqItem = serviceRequests.find((r) => r.id === tId);
+  if (reqItem) {
+    reqItem.status = ticket.status === "Auto-Created" ? "Pending" : ticket.status;
+  }
+
+  res.json(ticket);
+});
+
 // Fallback 404 for undefined /api routes
 app.all("/api/{*all}", (req: Request, res: Response) => {
   res.status(404).json({
