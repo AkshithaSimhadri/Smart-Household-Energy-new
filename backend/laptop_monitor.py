@@ -12,7 +12,10 @@ load_dotenv()
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-custom_url = os.environ.get("LAPTOP_MONITOR_API_URL", "").strip()
+custom_url = os.environ.get(
+    "LAPTOP_MONITOR_API_URL",
+    "https://smart-household-energy.onrender.com/api/telemetry/laptop"
+).strip()
 API_ENDPOINTS = [custom_url] if custom_url else []
 API_ENDPOINTS.extend([
     "http://localhost:8000/api/telemetry/laptop",
