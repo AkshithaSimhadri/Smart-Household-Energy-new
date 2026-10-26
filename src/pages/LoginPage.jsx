@@ -13,7 +13,7 @@ const LoginPage = () => {
   const handleLogin = async (e) => {
     e.preventDefault();
     try {
-      const response = await axios.post('/api/auth/login', { email, password });
+      const response = await axios.post('https://smart-household-energy.onrender.com/api/auth/login', { email, password });
       localStorage.setItem('token', response.data.access_token);
       localStorage.setItem('role', response.data.user.role);
       localStorage.setItem('userId', response.data.user.id);
